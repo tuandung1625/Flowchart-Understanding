@@ -4,7 +4,7 @@ For each sample (e.g. ID=42), reads:
   - {split}/svg/42.svg              -> exact shape geometry (positions + sizes)
 
 Outputs:
-  - {split}/labels/42.txt           -> YOLO-seg format: class_id x_center y_center width height x1 y1 x2 y2 ... xn yn
+    - {split}/labels/42.txt           -> YOLOv8-seg format: class_id x1 y1 x2 y2 ... xn yn
                                        (all values normalized to [0,1] relative to image size)
                                        Polygon vertices preserve shape information (ovals, diamonds, parallelograms)
 
@@ -19,6 +19,7 @@ Class mapping:
 
 import os
 import re
+import math
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from svgpathtools import parse_path
@@ -75,33 +76,105 @@ def path_bbox(d: str) -> tuple[float, float, float, float] | None:
 
 # Extract polygon vertices from SVG path (sampled points along the curve)
 def path_to_vertices(d: str, num_samples: int = 20) -> list[tuple[float, float]] | None:
-    """
-    Extract vertices from SVG path by sampling points along the curve.
-    For curves (bezier, arcs), sample evenly; for polygons, use actual vertices.
-    Returns list of (x, y) tuples in local coordinates.
-    """
     try:
         path = parse_path(d)
+        if not path:
+            return None
+
+        # If the path is polygonal (line-only), preserve exact corners.
+        if all(seg.__class__.__name__ == 'Line' for seg in path):
+            vertices = [(path[0].start.real, path[0].start.imag)]
+            for seg in path:
+                end_pt = (seg.end.real, seg.end.imag)
+                if end_pt != vertices[-1]:
+                    vertices.append(end_pt)
+            if len(vertices) > 1 and vertices[0] == vertices[-1]:
+                vertices.pop()
+            return vertices
+
+        # For curves/arcs, sample each segment so non-linear shapes are preserved.
         vertices = []
-        
-        # Sample points along the path at even intervals
-        for i in range(num_samples):
-            t = i / max(num_samples - 1, 1)  # t in [0, 1]
-            point = path.point(t)
-            vertices.append((point.real, point.imag))
-        
+        seg_samples = max(6, num_samples // max(1, len(path)))
+        for seg in path:
+            if not vertices:
+                vertices.append((seg.start.real, seg.start.imag))
+            for i in range(1, seg_samples + 1):
+                t = i / seg_samples
+                point = seg.point(t)
+                pt = (point.real, point.imag)
+                if pt != vertices[-1]:
+                    vertices.append(pt)
+
+        if len(vertices) > 1 and vertices[0] == vertices[-1]:
+            vertices.pop()
+
         return vertices if vertices else None
     except Exception:
         return None
 
 # Extract rectangle corners as vertices
-def rect_to_vertices(x: float, y: float, w: float, h: float) -> list[tuple[float, float]]:
-    return [
-        (x, y),
-        (x + w, y),
-        (x + w, y + h),
-        (x, y + h)
+def rect_to_vertices(
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    rx: float = 0.0,
+    ry: float = 0.0,
+    arc_samples: int = 6,
+) -> list[tuple[float, float]]:
+    rx = max(0.0, min(rx, w / 2))
+    ry = max(0.0, min(ry, h / 2))
+
+    # SVG behavior: if one of rx/ry is zero but the other is non-zero, they mirror.
+    if rx == 0.0 and ry > 0.0:
+        rx = min(ry, w / 2)
+    if ry == 0.0 and rx > 0.0:
+        ry = min(rx, h / 2)
+
+    if rx == 0.0 and ry == 0.0:
+        return [
+            (x, y),
+            (x + w, y),
+            (x + w, y + h),
+            (x, y + h),
+        ]
+
+    def arc_points(
+        cx: float,
+        cy: float,
+        arx: float,
+        ary: float,
+        start_angle: float,
+        end_angle: float,
+        steps: int,
+    ) -> list[tuple[float, float]]:
+        pts: list[tuple[float, float]] = []
+        for i in range(1, steps + 1):
+            t = i / steps
+            ang = start_angle + (end_angle - start_angle) * t
+            pts.append((cx + arx * math.cos(ang), cy + ary * math.sin(ang)))
+        return pts
+
+    n = max(3, arc_samples)
+    vertices = [
+        (x + rx, y),
+        (x + w - rx, y),
     ]
+    vertices.extend(arc_points(x + w - rx, y + ry, rx, ry, -math.pi / 2, 0.0, n))
+    vertices.append((x + w, y + h - ry))
+    vertices.extend(arc_points(x + w - rx, y + h - ry, rx, ry, 0.0, math.pi / 2, n))
+    vertices.append((x + rx, y + h))
+    vertices.extend(arc_points(x + rx, y + h - ry, rx, ry, math.pi / 2, math.pi, n))
+    vertices.append((x, y + ry))
+    vertices.extend(arc_points(x + rx, y + ry, rx, ry, math.pi, 3 * math.pi / 2, n))
+
+    cleaned: list[tuple[float, float]] = []
+    for pt in vertices:
+        if not cleaned or pt != cleaned[-1]:
+            cleaned.append(pt)
+    if len(cleaned) > 1 and cleaned[0] == cleaned[-1]:
+        cleaned.pop()
+    return cleaned
 
 # Core SVG parser for YOLO-seg
 def get_shape_annotations(
@@ -112,8 +185,6 @@ def get_shape_annotations(
     Parse an SVG file and return normalised YOLO-seg annotations.
     
     Returns {node_id: ((x_center, y_center, width, height), [(x1, y1), (x2, y2), ...])} where:
-    - bbox (x_center, y_center, width, height) in [0, 1]
-    - polygon vertices in [0, 1] representing shape mask
     
     The SVG uses preserveAspectRatio="xMidYMid meet", so we apply the
     correct uniform-scale + centering offset before normalising.
@@ -121,7 +192,7 @@ def get_shape_annotations(
     tree = ET.parse(svg_path)
     root = tree.getroot()
 
-    # --- viewBox (the SVG coordinate space used by shape geometry) ---
+    # viewBox (the SVG coordinate space used by shape geometry)
     viewbox = root.get('viewBox', '').split()
     if len(viewbox) >= 4:
         vb_w, vb_h = float(viewbox[2]), float(viewbox[3])
@@ -129,11 +200,11 @@ def get_shape_annotations(
         vb_w = float(root.get('width', 1))
         vb_h = float(root.get('height', 1))
 
-    # --- viewport (the rendered canvas size, matches PNG at some integer scale) ---
+    # viewport (the rendered canvas size, matches PNG at some integer scale)
     vp_w = float(root.get('width',  vb_w))
     vp_h = float(root.get('height', vb_h))
 
-    # --- preserveAspectRatio="xMidYMid meet" transform ---
+    # preserveAspectRatio="xMidYMid meet" transform
     # Scale the viewBox uniformly to fit inside the viewport, centred.
     scale    = min(vp_w / vb_w, vp_h / vb_h)
     offset_x = (vp_w - vb_w * scale) / 2
@@ -145,8 +216,6 @@ def get_shape_annotations(
         elem_id = elem.get('id', '')
 
         # Only process elements whose id directly maps to a flowchart node.
-        # This automatically skips text labels (ids ending in 't') and the
-        # inner border rect of subroutine shapes (ids ending in 'i').
         if elem_id not in node_types:
             continue
 
@@ -161,8 +230,10 @@ def get_shape_annotations(
             y = float(elem.get('y', 0)) + ty
             w = float(elem.get('width',  0))
             h = float(elem.get('height', 0))
+            rx = float(elem.get('rx', 0) or 0)
+            ry = float(elem.get('ry', 0) or 0)
             bbox_info = (x, y, w, h)
-            vertices = rect_to_vertices(x, y, w, h)
+            vertices = rect_to_vertices(x, y, w, h, rx=rx, ry=ry)
 
         elif tag == 'path':
             # Skip connector arrows (fill="none")
@@ -215,11 +286,7 @@ def get_shape_annotations(
 
     return annotations
 
-
-# -------------------------------------------------------------------
 # Annotation writer
-# -------------------------------------------------------------------
-
 def generate_yolo_annotation(
     flowchart_path: str,
     svg_path: str,
@@ -227,25 +294,23 @@ def generate_yolo_annotation(
 ) -> bool:
     """
     Generate a YOLO-seg .txt annotation file for one sample.
-    Format: class_id x_center y_center width height x1 y1 x2 y2 ... xn yn
-    Returns True on success, False if no annotations were produced.
+    Ultralytics YOLOv8-seg format: class_id x1 y1 x2 y2 ... xn yn
     """
     node_types = parse_flowchart(flowchart_path)
     annotations = get_shape_annotations(svg_path, node_types)
 
     lines = []
-    for node_id, (bbox, vertices) in annotations.items():
+    for node_id, (_, vertices) in annotations.items():
         node_type = node_types.get(node_id)
         if node_type not in CLASS_MAP:
             continue
         class_id = CLASS_MAP[node_type]
-        xc, yc, w, h = bbox
-        
+
         # Build polygon vertex string
         vertex_str = ' '.join(f"{x:.6f} {y:.6f}" for x, y in vertices)
-        
-        # YOLO-seg format: class_id bbox polygon
-        lines.append(f"{class_id} {xc:.6f} {yc:.6f} {w:.6f} {h:.6f} {vertex_str}")
+
+        # YOLOv8-seg format: class_id polygon
+        lines.append(f"{class_id} {vertex_str}")
 
     if not lines:
         return False
@@ -254,11 +319,7 @@ def generate_yolo_annotation(
         f.write('\n'.join(lines) + '\n')
     return True
 
-
-# -------------------------------------------------------------------
 # Dataset processing
-# -------------------------------------------------------------------
-
 def process_split(split_dir: Path) -> None:
     flowchart_dir = split_dir / 'flowchart'
     svg_dir       = split_dir / 'svg'
@@ -299,9 +360,6 @@ def write_yaml(dataset_root: Path) -> None:
     class_names = sorted(CLASS_MAP, key=CLASS_MAP.get)
     yaml_content = f"""\
 # FloCo flowchart shape detection dataset (YOLO-seg segmentation format)
-# Auto-generated by generate_yolo_annotations.py
-# Format: class_id x_center y_center width height x1 y1 x2 y2 ... xn yn
-
 path: {dataset_root.as_posix()}
 
 train: Train/png
@@ -316,13 +374,8 @@ names: {class_names}
         f.write(yaml_content)
     print(f"\nDataset YAML (YOLO-seg) written to: {yaml_path}")
 
-
-# -------------------------------------------------------------------
-# Entry point
-# -------------------------------------------------------------------
-
+# RUN
 if __name__ == '__main__':
-    print("=== FloCo → YOLO Annotation Generator ===")
     print(f"Dataset root : {DATASET_ROOT}")
     print(f"Class map    : {CLASS_MAP}\n")
 
