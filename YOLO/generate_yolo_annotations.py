@@ -1,22 +1,3 @@
-"""
-For each sample (e.g. ID=42), reads:
-  - {split}/flowchart/42.flowchart  -> node_id => node_type mapping
-  - {split}/svg/42.svg              -> exact shape geometry (positions + sizes)
-
-Outputs:
-    - {split}/labels/42.txt           -> YOLOv8-seg format: class_id x1 y1 x2 y2 ... xn yn
-                                       (all values normalized to [0,1] relative to image size)
-                                       Polygon vertices preserve shape information (ovals, diamonds, parallelograms)
-
-Class mapping:
-  0 = start        (rounded rectangle, oval)
-  1 = end          (rounded rectangle, oval)
-  2 = inputoutput  (parallelogram)
-  3 = operation    (plain rectangle)
-  4 = subroutine   (rectangle with inner border lines)
-  5 = condition    (diamond / rhombus)
-"""
-
 import os
 import re
 import math

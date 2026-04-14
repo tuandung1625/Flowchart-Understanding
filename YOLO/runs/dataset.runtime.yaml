@@ -1,0 +1,9 @@
+# FloCo flowchart shape detection dataset (YOLO-seg segmentation format)
+path: /root/dataset
+
+train: Train/images
+val: Validation/images
+test: Test/images
+
+nc: 6
+names: ['start', 'end', 'inputoutput', 'operation', 'subroutine', 'condition']
