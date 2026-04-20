@@ -136,7 +136,68 @@ def run_ocr_on_crop(ocr: PaddleOCR, crop: np.ndarray) -> tuple[str, float, list[
         return "", 0.0, []
 
     result = ocr.predict(crop)
-    if not result or not result[0]:
+    if not result:
+        return "", 0.0, []
+
+    # PaddleOCR 3.x commonly returns OCRResult objects with payload in result[0]['res'].
+    first = result[0]
+    payload = None
+    if isinstance(first, dict):
+        payload = first.get("res", first)
+    elif hasattr(first, "get"):
+        payload = first.get("res", None)
+    elif hasattr(first, "res"):
+        payload = getattr(first, "res")
+
+    if isinstance(payload, dict) and "rec_texts" in payload:
+        rec_texts = payload.get("rec_texts") or []
+        rec_scores = payload.get("rec_scores") or []
+        polys = payload.get("dt_polys") or payload.get("rec_polys") or []
+
+        lines = []
+        for idx, text in enumerate(rec_texts):
+            txt = str(text).strip()
+            if not txt:
+                continue
+
+            conf = 0.0
+            if idx < len(rec_scores):
+                try:
+                    conf = float(rec_scores[idx])
+                except (TypeError, ValueError):
+                    conf = 0.0
+
+            box = []
+            if idx < len(polys):
+                poly = polys[idx]
+                try:
+                    box = [[float(p[0]), float(p[1])] for p in poly]
+                except Exception:
+                    box = []
+
+            if box:
+                cx = float(sum(p[0] for p in box) / len(box))
+                cy = float(sum(p[1] for p in box) / len(box))
+            else:
+                cx = float(idx)
+                cy = float(idx)
+
+            lines.append(
+                {
+                    "text": txt,
+                    "conf": conf,
+                    "box": box,
+                    "cx": cx,
+                    "cy": cy,
+                }
+            )
+
+        lines.sort(key=lambda ln: (round(ln["cy"] / 10.0), ln["cx"]))
+        merged_text = "\n".join(ln["text"] for ln in lines)
+        mean_conf = float(np.mean([ln["conf"] for ln in lines])) if lines else 0.0
+        return merged_text, mean_conf, lines
+
+    if not result[0]:
         return "", 0.0, []
 
     lines = []
@@ -254,11 +315,11 @@ def main() -> None:
     detections: list[dict[str, Any]] = []
     boxes = res.boxes
     masks = res.masks
+    output_dir = resolve_output_dir(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     if boxes is None or len(boxes) == 0:
         output_path = resolve_output_path(args.output, image_path)
-        output_dir = resolve_output_dir(args.output)
-        output_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "image": str(image_path),
             "model": str(model_path),
