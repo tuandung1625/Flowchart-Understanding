@@ -6,6 +6,18 @@ from typing import Iterable
 import cv2
 
 
+CLASS_NAMES = [
+    "start",
+    "end",
+    "inputoutput",
+    "operation",
+    "subroutine",
+    "condition",
+    "arrow",
+    "arrow_head",
+]
+
+
 @dataclass
 class Annotation:
     class_id: int
@@ -125,6 +137,12 @@ def color_for_class(class_id: int) -> tuple[int, int, int]:
     return palette[class_id % len(palette)]
 
 
+def class_name_for_id(class_id: int) -> str:
+    if 0 <= class_id < len(CLASS_NAMES):
+        return CLASS_NAMES[class_id]
+    return f"unknown_{class_id}"
+
+
 def dim_color(color: tuple[int, int, int], factor: float = 0.5) -> tuple[int, int, int]:
     return (
         int(color[0] * factor),
@@ -184,11 +202,12 @@ def visualize_labels(
                 x1, y1, x2, y2 = ann.bbox_xyxy
                 color = color_for_class(ann.class_id)
                 bbox_color = dim_color(color, 0.45)
+                class_name = class_name_for_id(ann.class_id)
                 if draw_bbox:
                     cv2.rectangle(image, (x1, y1), (x2, y2), bbox_color, 1)
                 cv2.putText(
                     image,
-                    f"cls:{ann.class_id}",
+                    f"{class_name} ({ann.class_id})",
                     (x1, max(12, y1 - 4)),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.45,
