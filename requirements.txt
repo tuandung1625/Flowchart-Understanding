@@ -2,3 +2,5 @@ ultralytics
 paddleocr
 paddlepaddle
 opencv-python
+numpy
+svgpathtools

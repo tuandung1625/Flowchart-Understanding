@@ -28,3 +28,4 @@ DATASET/dataset.yaml
 
 # Optional: ignore full dataset if too large for git
 DATASET/
+runs/
