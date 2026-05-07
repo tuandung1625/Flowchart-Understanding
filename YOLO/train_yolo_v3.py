@@ -80,11 +80,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--batch", type=int, default=32)
     parser.add_argument("--workers", type=int, default=12)
-    parser.add_argument("--patience", type=int, default=20)
+    parser.add_argument("--patience", type=int, default=15)
     parser.add_argument(
         "--save-period",
         type=int,
-        default=5,
+        default=10,
         help="Save a checkpoint every N epochs; set 0 to disable periodic checkpoints",
     )
     parser.add_argument("--device", default="auto", help="auto, cpu, or gpu index like 0")
@@ -177,5 +177,4 @@ if __name__ == "__main__":
 
 # python3 train_yolo.py --data-root ./dataset --runs-dir ./runs --device 0 --batch 32 --epochs 100 --predict
 
-# python .\test_one_image.py "D:\Workspaces\PROJECT\Thesis - Flowchart\DATASET\Test\images\10103.png" --model "D:\Workspaces\PROJECT\Thesis - Flowchart\runs\segment\runs\flowchart_seg_exp12\weights\best.pt"  
 # yolo segment val model=./runs/flowchart_seg_exp1/weights/best.pt data=./DATASET/dataset.yaml split=test imgsz=640

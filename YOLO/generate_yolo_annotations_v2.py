@@ -7,14 +7,9 @@ New approach:
 4. Export separate annotations for shaft and head
 
 Example:
-  python convert_svg_to_yolo_v2.py \
-    --input DATASET/Train/svg \
-    --flowcharts DATASET/Train/flowchart \
-    --images DATASET/Train/images \
-    --output DATASET/Train/labels \
-    --labelme-output DATASET/Train/labelme \
-    --visualize runs/svg_preview
-"""
+  python YOLO/get_yolo_annotations.py --input DATASET/Test/svg --flowcharts DATASET/Test/flowchart --images DATASET/Test/images --output DATASET/Test/labels --labelme-output DATASET/Test/labelme --visualize runs/svg_preview
+
+  """
 
 from __future__ import annotations
 
