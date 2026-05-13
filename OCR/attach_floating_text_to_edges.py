@@ -3,10 +3,7 @@
 # Cách làm: tính khoảng cách từ text center tới edge polyline
 # → attach vào edge gần nhất
 
-# python OCR/attach_floating_text_to_edges.py \
-#   --ocr-input runs/ocr_full_post \
-#   --graph-input runs/graph_v2 \
-#   --output runs/graph_with_labels
+# python OCR/attach_floating_text_to_edges.py --ocr-input runs/ocr_full_post --graph-input runs/graph_v2 --output runs/graph_with_labels
 
 import argparse
 import json
